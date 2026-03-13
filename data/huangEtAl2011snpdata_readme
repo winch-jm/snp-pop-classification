@@ -1,0 +1,130 @@
+(Version 1.0) The data files below describe the SNP data used for the
+paper "Haplotype variation and genotype imputation in African populations"
+by L Huang, M Jakobsson, TJ Pemberton, M Ibrahim, T Nyambo, S Omar, 
+JK Pritchard, SA Tishkoff, NA Rosenberg (Genetic Epidemiology 35(8):766-80
+[2011]). These data are a combination of data from 8 African populations
+and the data used for the paper "Using population mixtures to optimize the
+utility of genomic databases: linkage disequilibrium and association study
+design in India" by TJ Pemberton, M Jakobsson, DF Conrad, G Coop, JD Wall,
+JK Pritchard, PI Patel, NA Rosenberg (Annals of Human Genetics 72:535-546
+[2008]).
+
+*Version 1.0 of the package of files - created by TJP, Jan 31, 2012
+
+--------------------------------------------------------------------------
+
+The following data sets are available:
+
+1. unphased_HGDP+India+Africa_2810SNPs-regions1to36.stru
+(HGDP data+Indian data+African data - 1107 individuals, 2810 SNPs)
+
+2. phased_HGDP+India+Africa_2810SNPs-regions1to36.stru
+(HGDP data+Indian data+African data - 1107 individuals, 2810 SNPs)
+
+3. unphased_HGDP+India+Africa_1195SNPs-chr21-regions7to22.stru
+(HGDP data+Indian data+African data - 1107 individuals, 1195 SNPs
+on chromosome 21)
+
+4. phased_HGDP+India+Africa_1272SNPs-chr21-regions7to22.stru
+(HGDP data+Indian data+African data - 1107 individuals, 1272 SNPs
+on chromosome 21)
+
+5. unphased_HGDP+India+Africa_517SNPs-chr21-regions7to22.stru
+(HGDP data+Indian data+African data - 1107 individuals, 517 SNPs
+on chromosome 21)
+
+6. phased_HapMap3-release2_517SNPs-chr21-regions7to22.stru
+(HapMap Phase 3 release 2 data - 901 individuals, 517 SNPs
+on chromosome 21)
+
+7. chr21_hapmap3.polaritySNP
+(44 SNP rs IDs)
+
+File 1 is the raw HGDP, Indian, and African unphased data, after 
+elimination of SNPs that failed quality checks and individuals who 
+were related.
+
+File 2 is the phased HGDP, Indian, and African data with all missing
+genotypes imputed, using the genomic "regions" labels (1-36).
+
+File 3 is the unphased HGDP, Indian, and African data for regions on
+chromosome 21 only (7 to 22) and excluding the 77 SNPs masked for
+the imputation analysis.
+
+File 4 is the phased HGDP, Indian, and African data for regions on 
+chromosome 21 only (7 to 22).
+
+File 5 is the unphased HGDP, Indian, and African data after elimination
+of SNPs that did not overlap with those of HapMap Phase 3 (release 2).
+
+File 6 is the phased HapMap Phase 3 (release 2) data with all missing
+genotypes imputed, for regions on chromosome 21 only (7 to 22).  This
+file was created from the HapMap3 collection by leaving out individuals
+who were related.
+
+File 7 is a list of the 44 SNPs on chromosome 21 that were repolarized
+in the HGDP+Indian+African data to match the HapMap data (see below).
+
+--------------------------------------------------------------------------
+
+For 44 SNPs (see File 7), Files 1 and 2 appear to differ in strand
+polarity from HapMap Phase 3 (release 2) - that is, for these SNPs, our
+data arrived with a strand polarity different from that in the HapMap.
+To create Files 3 to 6 that were analyzed in conjunction with the HapMap
+data, these SNPs in the HGDP+Indian+African data were repolarized to match
+the HapMap data.
+
+Note that 3 of the core regions (regions 30, 31 and 32) contain large
+gaps that we identified only after the design phase of the Conrad et
+al. 2006 study was complete. For one analysis using core SNPs, we
+split each of these regions into two regions. In this case, we
+included 5 non-core SNPs (rs212858 in region 30, rs6467107 in region
+32, rs6962580 in region 32, rs6467108 in region 32, and rs6467109 in
+region 32) because each of these SNPs was located less than 200bp from
+a core SNP or less than 200bp from a non-core SNP that was connected
+to a core SNP by less than 200bp.
+
+--------------------------------------------------------------------------
+
+The data are in "structure" format with 2 rows per individual.  
+
+Rows:
+1. rs number
+2. region number (1..36)
+3. chromosome number
+4. snp position on chromosome
+5. core region indicator (1 = core region, 0 = non-core region)
+6...X*2+4: individual data for X individuals
+
+In the phased files (Files 2, 4 and 6) each of the two rows for an
+individual represents one of the two haplotypes.  Phasing was performed
+within genomic regions, so there is no correspondence of haplotypes 
+across region boundaries.  In the unphased files (Files 1, 3 and 5),
+the placement of genotypes on the first versus second line for an
+individual is arbitrary.
+
+Columns for individual data (HGDP/India/Africa individuals):
+1. HGDP ID number or HapMap NA number
+2. numeric code for population
+3. name of population
+4. country of origin
+5. geographic region of origin
+6. ID number assigned during genotyping
+7. sex (M = male, F = female)
+8... genotypes (A, C, G, T, or ? for missing data or hemizygous males 
+   on the X-chromosome)
+
+Columns for individual data (HapMap individuals):
+1. HapMap ID number (string)
+2. numeric code for population
+3. name of population
+4. country of origin
+5. geographic region of origin
+6. HapMap ID number (string); a placeholder to make the number of columns
+   match the HGDP/India/Africa data file
+7. sex (M = male, F = female) taken from "Inference of unexpected genetic
+   relatedness among individuals in HapMap Phase III" by TJ Pemberton,
+   C Wang, JZ Li, NA Rosenberg (American Journal of Human Genetics 87(4):
+   457-464 [2010]).
+8... genotypes (A, C, G, T, or ? for missing data or hemizygous males 
+   on the X-chromosome)
