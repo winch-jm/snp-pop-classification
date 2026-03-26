@@ -2,72 +2,100 @@
 
 import pandas as pd
 import numpy as np
+from sklearn.model_selection import train_test_split
 
 ##### Workflow
 # Goal -- compress 2810 SNPs from 1107 people into top PCs that capture most meaningful variance
 # allele dosage matrix --> normalized allele dosage matrix --> eigenvectors --> top PC scores (feature matrix for classifer)
+# *train/test split is performed before PCA so test data does not influence the principal axes
 
 ### 1) Loading in allele dosage matrix and metaIndex csv file saved from data processing
 
 X_norm = np.load("../../data/normAlleleDosagemat.npy")
 metaIndex = pd.read_csv("../../data/metaDataIndex.csv")
 
-### 2) Building Genomic Relationship matrix G (covariance matrix)
+labels = metaIndex['geo_region_of_origin'].values
 
-# G = nIndividuals x nIndividual matrix of pairwise genetic similarity
+### 2) Train / test split (stratified by population label, 80/20)
 
-# making genomic relationship / covariance matrix
-nNormSNP = X_norm.shape[1]
-G = (X_norm @ X_norm.T) / nNormSNP
+trainIdx, testIdx = train_test_split(np.arange(len(labels)), test_size=0.2, random_state=42,stratify=labels)
 
-### 3) Eigendecomposition of G
+X_train = X_norm[trainIdx]
+X_test  = X_norm[testIdx]
+labels_train = labels[trainIdx]
+labels_test  = labels[testIdx]
 
-# eigenvectors of G give scores (direction along which people vary)
-# eigenvalues of G = total variation along vector
+### 3) Building Genomic Relationship matrix G on training data only
 
-# getting eigenvalues
-eigenvalues, eigenvectors = np.linalg.eigh(G)
+# G = nTrain x nTrain matrix of pairwise genetic similarity among training individuals
+nNormSNP = X_train.shape[1]
+G_train = (X_train @ X_train.T) / nNormSNP
 
-# sorting values in descending order to most variance first
+### 4) Eigendecomposition of G_train
+
+# eigenvectors of G_train give directions along which training individuals vary most
+# eigenvalues reflect total variance along each direction
+eigenvalues, eigenvectors = np.linalg.eigh(G_train)
+
+# sorting values in descending order so most variance PC comes first
 order = np.argsort(eigenvalues)[::-1]
 eigenvalues  = eigenvalues[order]
 eigenvectors = eigenvectors[:, order]
 
-# sanity check -- eigenvalue sum should equal trace of G
-assert np.isclose(eigenvalues.sum(), np.trace(G)), "Eigenvalue sum does not match trace of G"
+# sanity check -- eigenvalue sum should equal trace of G_train
+assert np.isclose(eigenvalues.sum(), np.trace(G_train)), "Eigenvalue sum does not match trace of G_train"
 
-# sanity check -- no large negative eigenvalues / G should be positive semi-definite
+# sanity check -- no large negative eigenvalues / G_train should be positive semi-definite
 assert eigenvalues[-1] > -1e-10, f"Large negative eigenvalue detected: {eigenvalues[-1]}"
 
 # getting explained variance for each eigenvalue
 explainedRatio = eigenvalues / eigenvalues.sum()
 
-# finding number of PCs to explain 80% of variance in data
+# finding number of PCs to explain 80% of variance in training data
 cumVar = np.cumsum(explainedRatio)
 nPCs80 = np.searchsorted(cumVar, 0.80) + 1
 print(f"PCs needed to explain 80% variance: {nPCs80}")
 
-### 4) extracting PC scores for downstream classification
+### 5) Deriving SNP-space loadings from training eigenvectors
 
-# PC scores: projection of each individual onto the top-k principal axes (eigenvectors) --> feature matrix for the classifier
-# shape: (n_individuals, n_components)
+# eigenvectors of G_train are in sample space (n_train, )
+# to project train and test data, need SNP-space loadings V (nSNPs x nComponents).
 
-# taking top 208 eigenvectors required to explain 80% of variance (as calculated above) and scaling by sqrt(nNormSNP * eigenvalue) to get true PC scores
+# from the SVD relationship:  X_train = U S V^T
+# then G_train = X_train X_train^T / # SNPs = U (S^2/ # SNPs) U^T
+# so converting to SNP loading space --> V = X_train^T U / sqrt(# SNPs * eigvals)
+# PC scores then = x @ V
+
 nComponents = 208
-pcScores = eigenvectors[:, :nComponents] * np.sqrt(nNormSNP * eigenvalues[:nComponents])
+# top 208 eigenvectors from G train (each col is PC direction in sample space)
+Uk = eigenvectors[:, :nComponents]
 
-# labels for classification — geographic region of origin
-labels = metaIndex['geo_region_of_origin'].values
+# converting to SNP loading space -- V = X_train^T U / sqrt(# SNPs * lambda)
+snpLoadings = X_train.T @ Uk / np.sqrt(nNormSNP * eigenvalues[:nComponents])
 
-### 5)  saving PC scores, labels and explained ratio for plots
+### 6) Projecting train and test data onto the training PCs
 
-# saving as npy files to easily load into notebook for plots
-# np.save("pcScores.npy", pcScores)
-# np.save("pc_geoRegion_labels.npy", labels)
+pcScores_train = X_train @ snpLoadings
+pcScores_test  = X_test  @ snpLoadings
+
+print(f"Train set: {pcScores_train.shape}, Test set: {pcScores_test.shape}")
+
+### 7) Save PC scores, labels, and explained ratio
+
+# npy files for plots
+# np.save("pcScores_train.npy", pcScores_train)
+# np.save("pcScores_test.npy", pcScores_test)
+# np.save("pc_geoRegion_labels_train.npy", labels_train)
+# np.save("pc_geoRegion_labels_test.npy", labels_test)
 # np.save("PCAexplainedRatio.npy", explainedRatio)
 
-# saving as labeled PCs as CSV file for classification
+# CSV files for downstream classification
 # pcCols = [f"PC{i+1}" for i in range(nComponents)]
-# dfOutput = pd.DataFrame(pcScores, columns = pcCols)
-# dfOutput["label"] = labels
-# dfOutput.to_csv("../../data/pcScores_labeled.csv", index = False)
+
+# dfTrain = pd.DataFrame(pcScores_train, columns=pcCols)
+# dfTrain["label"] = labels_train
+# dfTrain.to_csv("../../data/pcScores_train_labeled.csv", index=False)
+
+# dfTest = pd.DataFrame(pcScores_test, columns=pcCols)
+# dfTest["label"] = labels_test
+# dfTest.to_csv("../../data/pcScores_test_labeled.csv", index=False)
