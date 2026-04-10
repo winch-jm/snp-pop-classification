@@ -2,7 +2,7 @@
 
 import pandas as pd
 import numpy as np
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold
 
 ##### Workflow
 # Goal -- compress 2810 SNPs from 1107 people into top PCs that capture most meaningful variance
@@ -15,98 +15,121 @@ X_norm = np.load("../../data/normAlleleDosagemat.npy").astype(np.float64)
 metaIndex = pd.read_csv("../../data/metaDataIndex.csv")
 labels = metaIndex['geo_region_of_origin'].values
 
-### 2) Cross-validation over train/test split ratios
+### 2) K-fold stratified cross-validation over train/test split ratios
+# each test size maps to nsplits = round(1 / test_size)
 
-test_sizes = [0.1, 0.2, 0.3, 0.4]
+# test sizes for 10/5/4/3 fold splits
+test_sizes = [0.1, 0.2, 0.25, 0.33]
 results = {}
+indices = np.arange(len(labels))
 
 for test_size in test_sizes:
-    with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
+    nSplits = round(1 / test_size)
+    skf = StratifiedKFold(n_splits=nSplits, shuffle=True, random_state=42)
 
-        trainIdx, testIdx = train_test_split(np.arange(len(labels)), test_size=test_size, random_state=42, stratify=labels)
+    fold_reconErrors = []
+    fold_nComponents = []
 
-        X_train = X_norm[trainIdx]
-        X_test  = X_norm[testIdx]
-        labels_train = labels[trainIdx]
-        labels_test  = labels[testIdx]
+    for fold, (trainIdx, testIdx) in enumerate(skf.split(indices, labels)):
+        with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
 
-        ### 3) Building Genomic Relationship matrix G on training data only
+            X_train = X_norm[trainIdx]
+            X_test  = X_norm[testIdx]
+            labels_train = labels[trainIdx]
+            labels_test  = labels[testIdx]
 
-        # G = nTrain x nTrain matrix of pairwise genetic similarity among training individuals
-        nNormSNP = X_train.shape[1]
-        G_train = (X_train @ X_train.T) / nNormSNP
+            ### 3) Building Genomic Relationship matrix G on training data only
 
-        ### 4) Eigendecomposition of G_train
+            # G = nTrain x nTrain matrix of pairwise genetic similarity among training individuals
+            nNormSNP = X_train.shape[1]
+            G_train = (X_train @ X_train.T) / nNormSNP
 
-        # eigenvectors of G_train give directions along which training individuals vary most
-        # eigenvalues reflect total variance along each direction
-        eigenvalues, eigenvectors = np.linalg.eigh(G_train)
+            ### 4) Eigendecomposition of G_train
 
-        # sorting values in descending order so most variant PC comes first
-        order = np.argsort(eigenvalues)[::-1]
-        eigenvalues  = eigenvalues[order]
-        eigenvectors = eigenvectors[:, order]
+            # eigenvectors of G_train give directions along which training individuals vary most
+            # eigenvalues reflect total variance along each direction
+            eigenvalues, eigenvectors = np.linalg.eigh(G_train)
 
-        # sanity check -- eigenvalue sum should equal trace of G_train
-        assert np.isclose(eigenvalues.sum(), np.trace(G_train)), "Eigenvalue sum does not match trace of G_train"
+            # sorting values in descending order so most variant PC comes first
+            order = np.argsort(eigenvalues)[::-1]
+            eigenvalues  = eigenvalues[order]
+            eigenvectors = eigenvectors[:, order]
 
-        # sanity check -- no large negative eigenvalues / G_train should be positive semi-definite
-        assert eigenvalues[-1] > -1e-10, f"Large negative eigenvalue detected: {eigenvalues[-1]}"
+            # sanity check -- eigenvalue sum should equal trace of G_train
+            assert np.isclose(eigenvalues.sum(), np.trace(G_train)), "Eigenvalue sum does not match trace of G_train"
 
-        # getting explained variance for each eigenvalue
-        explainedRatio = eigenvalues / eigenvalues.sum()
+            # sanity check -- no large negative eigenvalues / G_train should be positive semi-definite
+            assert eigenvalues[-1] > -1e-10, f"Large negative eigenvalue detected: {eigenvalues[-1]}"
 
-        # finding number of PCs to explain 80% of variance in training data
-        cumVar = np.cumsum(explainedRatio)
-        nComponents = np.searchsorted(cumVar, 0.80) + 1
+            # getting explained variance for each eigenvalue
+            explainedRatio = eigenvalues / eigenvalues.sum()
 
-        ### 5) Deriving SNP-space loadings from training eigenvectors
+            # finding number of PCs to explain 80% of variance in training data
+            cumVar = np.cumsum(explainedRatio)
+            nComponents = np.searchsorted(cumVar, 0.80) + 1
 
-        # eigenvectors of G_train are in sample space (n_train, )
-        # to project train and test data, need SNP-space loadings V (nSNPs x nComponents).
+            ### 5) Deriving SNP-space loadings from training eigenvectors
 
-        # from the SVD relationship:  X_train = U S V^T
-        # then G_train = X_train X_train^T / # SNPs = U (S^2/ # SNPs) U^T
-        # so converting to SNP loading space --> V = X_train^T U / sqrt(# SNPs * eigvals)
-        # PC scores then = x @ V
+            # eigenvectors of G_train are in sample space (n_train, )
+            # to project train and test data, need SNP-space loadings V (nSNPs x nComponents).
 
-        Uk = eigenvectors[:, :nComponents]
+            # from the SVD relationship:  X_train = U S V^T
+            # then G_train = X_train X_train^T / # SNPs = U (S^2/ # SNPs) U^T
+            # so converting to SNP loading space --> V = X_train^T U / sqrt(# SNPs * eigvals)
+            # PC scores then = x @ V
 
-        # converting to SNP loading space -- V = X_train^T U / sqrt(# SNPs * lambda)
-        snpLoadings = X_train.T @ Uk / np.sqrt(nNormSNP * eigenvalues[:nComponents])
+            Uk = eigenvectors[:, :nComponents]
 
-        # fixing any sign ambiguity
-        # makes element with the largest absolute value in each loading vector positive
-        signs = np.sign(snpLoadings[np.argmax(np.abs(snpLoadings), axis=0), np.arange(nComponents)])
-        snpLoadings *= signs
+            # converting to SNP loading space -- V = X_train^T U / sqrt(# SNPs * lambda)
+            snpLoadings = X_train.T @ Uk / np.sqrt(nNormSNP * eigenvalues[:nComponents])
 
-        ### 6) Projecting train and test data onto the training PCs
+            # fixing any sign ambiguity
+            # makes element with the largest absolute value in each loading vector positive
+            signs = np.sign(snpLoadings[np.argmax(np.abs(snpLoadings), axis=0), np.arange(nComponents)])
+            snpLoadings *= signs
 
-        pcScores_train = X_train @ snpLoadings
-        pcScores_test  = X_test  @ snpLoadings
+            ### 6) Projecting train and test data onto the training PCs
 
-        ### 7) Reconstruction error on test sets
-        # mean squared error between held out test data and reconstructed test data from retained PC scores
+            pcScores_train = X_train @ snpLoadings
+            pcScores_test  = X_test  @ snpLoadings
 
-        X_reconstructed = pcScores_test @ snpLoadings.T
-        reconError = np.mean((X_test - X_reconstructed) ** 2)
+            ### 7) Reconstruction error on test fold
+            # mean squared error between held out test data and reconstructed test data from retained PC scores
 
-        results[test_size] = {"train_n":len(trainIdx), "test_n": len(testIdx),
-                              "nComponents": nComponents,"reconError":  reconError}
+            X_reconstructed = pcScores_test @ snpLoadings.T
+            reconError = np.mean((X_test - X_reconstructed) ** 2)
 
-        print(f"test_size={test_size:.0%} | train={len(trainIdx)}, test={len(testIdx)} | "
-              f"nComponents={nComponents} | recon_error={reconError:.4f}")
+            fold_reconErrors.append(reconError)
+            fold_nComponents.append(nComponents)
 
-        ### 8) saving PC scores of split as a labeled CSV
-        # rows = samples
-        # cols -- PC1...PCM, LABEL, SPLIT (0/1)
-        col = f"split_{int(test_size*100)}"
-        pcCols = [f"PC{i+1}" for i in range(nComponents)]
-        # stacking so train scores on top and test scores on bottom
-        df = pd.DataFrame(np.vstack([pcScores_train, pcScores_test]), columns=pcCols)
-        df["label"] = np.concatenate([labels_train, labels_test])
-        df[col] = np.concatenate([np.ones(len(trainIdx)), np.zeros(len(testIdx))]).astype(int)
-        df.to_csv(f"../../data/pcScores_{col}.csv", index=False)
+            print(f"test_size={test_size:.0%} | fold={fold+1}/{nSplits} | "
+                  f"train={len(trainIdx)}, test={len(testIdx)} | "
+                  f"nComponents={nComponents} | recon_error={reconError:.4f}")
+
+            ### 8) saving PC scores of last fold as a labeled CSV
+            # rows = samples
+            # cols -- PC1...PCM, LABEL, SPLIT (0/1)
+            if fold == nSplits - 1:
+                col = f"split_{int(test_size*100)}"
+                pcCols = [f"PC{i+1}" for i in range(nComponents)]
+                df = pd.DataFrame(np.vstack([pcScores_train, pcScores_test]), columns=pcCols)
+                df["label"] = np.concatenate([labels_train, labels_test])
+                df[col] = np.concatenate([np.ones(len(trainIdx)), np.zeros(len(testIdx))]).astype(int)
+                # df.to_csv(f"../../data/pcScores_{col}.csv", index=False)
+
+### 9) Summary of reconstruction error
+    avg_reconError = np.mean(fold_reconErrors)
+    avg_nComponents = np.mean(fold_nComponents)
+    results[test_size] = {
+        "n_splits": nSplits,
+        "avg_train_n": len(indices) - len(indices) // nSplits,
+        "avg_test_n":  len(indices) // nSplits,
+        "avg_nComponents": avg_nComponents,
+        "avg_reconError":  avg_reconError,
+        "std_reconError":  np.std(fold_reconErrors),
+    }
+    print(f"\ntest_size={test_size:.0%} | {nSplits}-fold CV avg recon_error={avg_reconError:.4f} "
+          f"± {np.std(fold_reconErrors):.4f}\n")
 
 ### 9) Save cross-validation results summary
-pd.DataFrame(results).T.rename_axis("test_size").reset_index().to_csv("../../data/pcaCV_results.csv", index=False)
+# pd.DataFrame(results).T.rename_axis("test_size").reset_index().to_csv("../../data/pcaCV_results.csv", index=False)
