@@ -2,161 +2,100 @@
 
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
 
 ##### Workflow
 # Goal -- compress 2810 SNPs from 1107 people into top PCs that capture most meaningful variance
-# raw SNP genotypes --> allele dosage matrix --> normalized allele dosage matrix --> eigenvectors --> top PC scores (feature matrix for classifer)
+# allele dosage matrix --> normalized allele dosage matrix --> eigenvectors --> top PC scores (feature matrix for classifer)
+# *train/test split is performed before PCA so test data does not influence the principal axes
 
-### 1) loading in dataset
+### 1) Loading in allele dosage matrix and metaIndex csv file saved from data processing
 
-dataset = "../../data/unphased_HGDP+India+Africa_2810SNPs-regions1to36.stru"
+X_norm = np.load("../../data/normAlleleDosagemat.npy")
+metaIndex = pd.read_csv("../../data/metaDataIndex.csv")
 
-df = pd.read_csv(dataset, sep = " ", skiprows = 5, header = None)
+labels = metaIndex['geo_region_of_origin'].values
 
-# separating meta data and SNP data
-df.columns = (["hgdp_id", "population_id", "population_name",
-               "country_of_origin", "geo_region_of_origin", "genotyping_id", "sex"] +
-              [str(i) for i in range(2810)])
-metaCols = ["hgdp_id", "population_id", "population_name",
-               "country_of_origin", "geo_region_of_origin", "genotyping_id", "sex"]
-snpCols = [str(i) for i in range(2810)]
+### 2) Train / test split (stratified by population label, 80/20)
 
-snpRaw = df[snpCols]
-meta = df[metaCols]
+trainIdx, testIdx = train_test_split(np.arange(len(labels)), test_size=0.2, random_state=42,stratify=labels)
 
-### 2) combining alleles for each individual into one row
-# in raw data, every 2 rows represents individual's 2 alleles for each SNP
-allele1 = snpRaw[0::2]
-allele2 = snpRaw[1::2]
+X_train = X_norm[trainIdx]
+X_test  = X_norm[testIdx]
+labels_train = labels[trainIdx]
+labels_test  = labels[testIdx]
 
-# combining every 2 metadata rows corresponding to combined allele rows
-metaIndex = meta.iloc[0::2].reset_index(drop = True)
+### 3) Building Genomic Relationship matrix G on training data only
 
-### 3) Converting genotypes into allele dosages (0, 1, 2)
+# G = nTrain x nTrain matrix of pairwise genetic similarity among training individuals
+nNormSNP = X_train.shape[1]
+G_train = (X_train @ X_train.T) / nNormSNP
 
-# for each SNP, picking one allele to be alt and counting how many copies of alt each individual has
-# missing data '?' becomes NaN and imputed with the column mean
+### 4) Eigendecomposition of G_train
 
-def encodeGenotypes(a1, a2):
+# eigenvectors of G_train give directions along which training individuals vary most
+# eigenvalues reflect total variance along each direction
+eigenvalues, eigenvectors = np.linalg.eigh(G_train)
 
-    nInd, nSnps = a1.shape
-    X = np.full((nInd, nSnps), np.nan)
-
-    # looping through each SNP to get valid genotypes from all individuals (not "?")
-    for i in range(nSnps):
-
-        # getting alleles from all individuals for SNP i and removing ?s
-        c1, c2 = a1[:, i], a2[:, i]
-        valid = (c1 != '?') & (c2 != '?')
-        alleles = np.concatenate([c1[valid], c2[valid]])
-
-        # getting all unique alleles for SNP i
-        unique = [a for a in np.unique(alleles) if a != '?']
-
-        # skipping monomorphic SNPs (all individuals share same genotype / same alleles) - will be dropped later
-        if len(unique) < 2:
-            continue
-
-        # choosing arbitrary allele to be alt
-        alt = unique[0]
-        # looping through each individual and assigning allele dosage numbers for SNP i
-        for j in range(nInd):
-            if c1[j] != '?' and c2[j] != '?':
-                X[j, i] = (c1[j] == alt) + (c2[j] == alt)
-    return X
-
-# running allele 1 and allele 2 values into encoding function to get allele dosage matrix
-allele1Vals = allele1.values
-allele2Vals = allele2.values
-X = encodeGenotypes(allele1Vals, allele2Vals)
-
-# replacing any Nans with mean of corresponding SNP
-colMeans = np.nanmean(X, axis=0)
-nanIdx = np.where(np.isnan(X))
-X[nanIdx] = np.take(colMeans, nanIdx[1])
-
-# dropping monomorphic SNPs (cols where variance = 0)
-varMask = X.var(axis=0) > 0
-X = X[:, varMask]
-
-# sanity check -- no NaNs and all dosage values are between 0 and 2
-assert not np.isnan(X).any(), "NaNs remain in dosage matrix"
-assert np.all((X >= 0) & (X <= 2)), "Dosage values outside expected range [0, 2]"
-
-### 4) normalizing allele dosage matrix X
-
-# centering each SNP and Patterson scaling (dividing by sqrt(p*(1-p)) so all variants contribute equally to the principal axes
-
-# p = minor allele frequency per SNP
-p = X.mean(axis=0) / 2
-scale = np.sqrt(p * (1 - p))
-
-# in case of any remaining monomorphic SNPs, setting scale = 1
-scale[scale == 0] = 1
-
-# normalizing X (centering then scaling) -> shape (nIndividuals, nSNPs)
-X_norm = (X - X.mean(axis=0)) / scale
-
-# sanity check -- normalized matrix should have around ~0 mean per SNP after centering
-assert np.abs(X_norm.mean(axis=0)).max() < 1e-10, "Normalization failed: non-zero column means"
-
-### 6) Building Genomic Relationship matrix G
-
-# G = nIndividuals x nIndividual matrix of pairwise genetic similarity
-
-# making genomic relationship / covariance matrix
-nNormSNP = X_norm.shape[1]
-G = (X_norm @ X_norm.T) / nNormSNP
-
-### 7) Eigendecomposition of G
-
-# eigenvectors of G give scores (direction along which people vary)
-# eigenvalues of G = total variation along vector
-
-# getting eigenvalues
-eigenvalues, eigenvectors = np.linalg.eigh(G)
-
-# sorting values in descending order to most variance first
+# sorting values in descending order so most variance PC comes first
 order = np.argsort(eigenvalues)[::-1]
 eigenvalues  = eigenvalues[order]
 eigenvectors = eigenvectors[:, order]
 
-# sanity check -- eigenvalue sum should equal trace of G
-assert np.isclose(eigenvalues.sum(), np.trace(G)), "Eigenvalue sum does not match trace of G"
+# sanity check -- eigenvalue sum should equal trace of G_train
+assert np.isclose(eigenvalues.sum(), np.trace(G_train)), "Eigenvalue sum does not match trace of G_train"
 
-# sanity check -- no large negative eigenvalues / G should be positive semi-definite
+# sanity check -- no large negative eigenvalues / G_train should be positive semi-definite
 assert eigenvalues[-1] > -1e-10, f"Large negative eigenvalue detected: {eigenvalues[-1]}"
 
 # getting explained variance for each eigenvalue
 explainedRatio = eigenvalues / eigenvalues.sum()
 
-# finding number of PCs to explain 80% of variance in data
+# finding number of PCs to explain 80% of variance in training data
 cumVar = np.cumsum(explainedRatio)
 nPCs80 = np.searchsorted(cumVar, 0.80) + 1
 print(f"PCs needed to explain 80% variance: {nPCs80}")
 
-### 8) extracting PC scores for downstream classification
+### 5) Deriving SNP-space loadings from training eigenvectors
 
-# PC scores: projection of each individual onto the top-k principal axes (eigenvectors) --> feature matrix for the classifier
-# shape: (n_individuals, n_components)
+# eigenvectors of G_train are in sample space (n_train, )
+# to project train and test data, need SNP-space loadings V (nSNPs x nComponents).
 
-# taking top 208 eigenvectors required to explain 80% of variance (as calculated above) and scaling by sqrt(nNormSNP * eigenvalue) to get true PC scores
+# from the SVD relationship:  X_train = U S V^T
+# then G_train = X_train X_train^T / # SNPs = U (S^2/ # SNPs) U^T
+# so converting to SNP loading space --> V = X_train^T U / sqrt(# SNPs * eigvals)
+# PC scores then = x @ V
+
 nComponents = 208
-pcScores = eigenvectors[:, :nComponents] * np.sqrt(nNormSNP * eigenvalues[:nComponents])
+# top 208 eigenvectors from G train (each col is PC direction in sample space)
+Uk = eigenvectors[:, :nComponents]
 
-# labels for classification — geographic region of origin
-labels = metaIndex['geo_region_of_origin'].values
+# converting to SNP loading space -- V = X_train^T U / sqrt(# SNPs * lambda)
+snpLoadings = X_train.T @ Uk / np.sqrt(nNormSNP * eigenvalues[:nComponents])
 
-### 9)  saving PC scores, labels and explained ratio for plots
+### 6) Projecting train and test data onto the training PCs
 
-# saving as npy files to easily load into notebook for plots
-# np.save("pcScores.npy", pcScores)
-# np.save("pc_geoRegion_labels.npy", labels)
+pcScores_train = X_train @ snpLoadings
+pcScores_test  = X_test  @ snpLoadings
+
+print(f"Train set: {pcScores_train.shape}, Test set: {pcScores_test.shape}")
+
+### 7) Save PC scores, labels, and explained ratio
+
+# npy files for plots
+# np.save("pcScores_train.npy", pcScores_train)
+# np.save("pcScores_test.npy", pcScores_test)
+# np.save("pc_geoRegion_labels_train.npy", labels_train)
+# np.save("pc_geoRegion_labels_test.npy", labels_test)
 # np.save("PCAexplainedRatio.npy", explainedRatio)
 
-# saving as labeled PCs as CSV file for classification
-pcCols = [f"PC{i+1}" for i in range(nComponents)]
-dfOutput = pd.DataFrame(pcScores, columns = pcCols)
-dfOutput["label"] = labels
-dfOutput.to_csv("../../data/pcScores_labeled.csv", index = False)
+# CSV files for downstream classification
+# pcCols = [f"PC{i+1}" for i in range(nComponents)]
+
+# dfTrain = pd.DataFrame(pcScores_train, columns=pcCols)
+# dfTrain["label"] = labels_train
+# dfTrain.to_csv("../../data/pcScores_train_labeled.csv", index=False)
+
+# dfTest = pd.DataFrame(pcScores_test, columns=pcCols)
+# dfTest["label"] = labels_test
+# dfTest.to_csv("../../data/pcScores_test_labeled.csv", index=False)
