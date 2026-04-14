@@ -28,6 +28,7 @@ for test_size in test_sizes:
     skf = StratifiedKFold(n_splits=nSplits, shuffle=True, random_state=42)
 
     fold_reconErrors = []
+    fold_testVarExplained = []
     fold_nComponents = []
 
     for fold, (trainIdx, testIdx) in enumerate(skf.split(indices, labels)):
@@ -98,13 +99,15 @@ for test_size in test_sizes:
 
             X_reconstructed = pcScores_test @ snpLoadings.T
             reconError = np.mean((X_test - X_reconstructed) ** 2)
+            testVarExplained = 1 - reconError / np.var(X_test)
 
             fold_reconErrors.append(reconError)
+            fold_testVarExplained.append(testVarExplained)
             fold_nComponents.append(nComponents)
 
             print(f"test_size={test_size:.0%} | fold={fold+1}/{nSplits} | "
                   f"train={len(trainIdx)}, test={len(testIdx)} | "
-                  f"nComponents={nComponents} | recon_error={reconError:.4f}")
+                  f"nComponents={nComponents} | recon_error={reconError:.4f} | test_var_explained={testVarExplained:.4f}")
 
             ### 8) saving PC scores of last fold as a labeled CSV
             # rows = samples
@@ -115,10 +118,12 @@ for test_size in test_sizes:
                 df = pd.DataFrame(np.vstack([pcScores_train, pcScores_test]), columns=pcCols)
                 df["label"] = np.concatenate([labels_train, labels_test])
                 df[col] = np.concatenate([np.ones(len(trainIdx)), np.zeros(len(testIdx))]).astype(int)
+                df["test_var_explained"] = testVarExplained
                 # df.to_csv(f"../../data/pcScores_{col}.csv", index=False)
 
 ### 9) Summary of reconstruction error
     avg_reconError = np.mean(fold_reconErrors)
+    avg_testVarExplained = np.mean(fold_testVarExplained)
     avg_nComponents = np.mean(fold_nComponents)
     results[test_size] = {
         "n_splits": nSplits,
@@ -127,9 +132,12 @@ for test_size in test_sizes:
         "avg_nComponents": avg_nComponents,
         "avg_reconError":  avg_reconError,
         "std_reconError":  np.std(fold_reconErrors),
+        "avg_testVarExplained": avg_testVarExplained,
+        "std_testVarExplained": np.std(fold_testVarExplained),
     }
     print(f"\ntest_size={test_size:.0%} | {nSplits}-fold CV avg recon_error={avg_reconError:.4f} "
-          f"± {np.std(fold_reconErrors):.4f}\n")
+          f"± {np.std(fold_reconErrors):.4f} | avg test_var_explained={avg_testVarExplained:.4f} "
+          f"± {np.std(fold_testVarExplained):.4f}\n")
 
 ### 9) Save cross-validation results summary
-# pd.DataFrame(results).T.rename_axis("test_size").reset_index().to_csv("../../data/pcaCV_results.csv", index=False)
+pd.DataFrame(results).T.rename_axis("test_size").reset_index().to_csv("../../data/pcaCV_results.csv", index=False)
