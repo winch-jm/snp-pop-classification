@@ -2,6 +2,7 @@
 
 import pandas as pd
 import numpy as np
+import anndata as ad
 from sklearn.model_selection import StratifiedKFold
 
 ##### Workflow
@@ -30,6 +31,7 @@ for test_size in test_sizes:
     fold_reconErrors = []
     fold_testVarExplained = []
     fold_nComponents = []
+    fold_pcScores = {}
 
     for fold, (trainIdx, testIdx) in enumerate(skf.split(indices, labels)):
         with np.errstate(divide='ignore', over='ignore', invalid='ignore'):
@@ -94,7 +96,20 @@ for test_size in test_sizes:
             pcScores_train = X_train @ snpLoadings
             pcScores_test  = X_test  @ snpLoadings
 
-            ### 7) Reconstruction error on test fold
+            ### 7) Storing full-individual PC scores in original row order for fold
+            # placing train and test scores back at their original indices so row i = individual i
+            # last column is train/test indicator: 0 = train, 1 = test
+
+            # creating array for fold pc scores for training and testing
+            foldScores = np.full((len(indices), nComponents), np.nan)
+            foldScores[trainIdx] = pcScores_train
+            foldScores[testIdx]  = pcScores_test
+            # adding in split col
+            splitCol = np.zeros((len(indices), 1))
+            splitCol[testIdx] = 1
+            fold_pcScores[fold] = np.hstack([foldScores, splitCol])
+
+            ### 8) Reconstruction error on test fold
             # mean squared error between held out test data and reconstructed test data from retained PC scores
 
             X_reconstructed = pcScores_test @ snpLoadings.T
@@ -109,19 +124,8 @@ for test_size in test_sizes:
                   f"train={len(trainIdx)}, test={len(testIdx)} | "
                   f"nComponents={nComponents} | recon_error={reconError:.4f} | test_var_explained={testVarExplained:.4f}")
 
-            ### 8) saving PC scores of last fold as a labeled CSV
-            # rows = samples
-            # cols -- PC1...PCM, LABEL, SPLIT (0/1)
-            if fold == nSplits - 1:
-                col = f"split_{int(test_size*100)}"
-                pcCols = [f"PC{i+1}" for i in range(nComponents)]
-                df = pd.DataFrame(np.vstack([pcScores_train, pcScores_test]), columns=pcCols)
-                df["label"] = np.concatenate([labels_train, labels_test])
-                df[col] = np.concatenate([np.ones(len(trainIdx)), np.zeros(len(testIdx))]).astype(int)
-                df["test_var_explained"] = testVarExplained
-                # df.to_csv(f"../../data/pcScores_{col}.csv", index=False)
 
-### 9) Summary of reconstruction error
+### 10) summary of reconstruction error
     avg_reconError = np.mean(fold_reconErrors)
     avg_testVarExplained = np.mean(fold_testVarExplained)
     avg_nComponents = np.mean(fold_nComponents)
@@ -139,5 +143,21 @@ for test_size in test_sizes:
           f"± {np.std(fold_reconErrors):.4f} | avg test_var_explained={avg_testVarExplained:.4f} "
           f"± {np.std(fold_testVarExplained):.4f}\n")
 
+    ### 11) Saving AnnData for split
+    # adata.X -- normalized SNP allele dosage matrix (nIndividuals x nSNPs)
+    # adata.obs -- sample metadata from metaIndex
+    # adata.obsm -- PC scores and split num (0/1) per fold, each (nIndividuals x nComponents_fold)
+    # individuals placed back in original row order
+
+    adata = ad.AnnData(
+        X   = X_norm.astype(np.float32),
+        obs = metaIndex.copy().reset_index(drop=True),
+        var = pd.DataFrame(index=[f"SNP{i}" for i in range(X_norm.shape[1])]),
+    )
+    for f in range(nSplits):
+        adata.obsm[f"X_pca_fold_{f+1}"] = fold_pcScores[f].astype(np.float32)
+
+    #adata.write_h5ad(f"../../data/pcScores_split_{int(test_size*100)}.h5ad")
+
 ### 9) Save cross-validation results summary
-pd.DataFrame(results).T.rename_axis("test_size").reset_index().to_csv("../../data/pcaCV_results.csv", index=False)
+# pd.DataFrame(results).T.rename_axis("test_size").reset_index().to_csv("../../data/pcaCV_results.csv", index=False)
