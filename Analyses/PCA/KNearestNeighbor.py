@@ -33,11 +33,6 @@ for u, c in zip(unique, counts):
 ### 2) Build the k-NN graph from scratch
 
 def pairwise_sq_euclidean(A, B):
-    """Squared Euclidean distances between rows of A and rows of B.
-
-    Uses the identity ||a - b||^2 = ||a||^2 + ||b||^2 - 2 a.b
-    so the whole (nA, nB) distance matrix is a single matrix product.
-    """
     aa = np.sum(A * A, axis=1, keepdims=True)   # (nA, 1)
     bb = np.sum(B * B, axis=1, keepdims=True).T # (1, nB)
     D2 = aa + bb - 2.0 * (A @ B.T)
@@ -47,20 +42,7 @@ def pairwise_sq_euclidean(A, B):
 
 
 def knn_graph(X_query, X_ref, k):
-    """Return the k-NN graph of X_query against X_ref.
-
-    For each query point, returns the indices into X_ref of its k nearest
-    neighbors (sorted by distance) and the corresponding Euclidean distances.
-
-    Returns
-    -------
-    indices   : (n_query, k) int
-    distances : (n_query, k) float
-    """
     D2 = pairwise_sq_euclidean(X_query, X_ref)          # (n_query, n_ref)
-
-    # np.argpartition places the k smallest entries in the first k slots
-    # (unordered). O(n_ref) per row — faster than a full sort.
     part = np.argpartition(D2, kth=k, axis=1)[:, :k]    # (n_query, k)
 
     # Fetch the partitioned distances and sort just those k per row
@@ -74,7 +56,6 @@ def knn_graph(X_query, X_ref, k):
 ### 3) Majority vote (uniform and distance-weighted)
 
 def majority_vote(neighbor_labels):
-    """Uniform-weight majority vote. Ties broken by first-seen class."""
     preds = np.empty(neighbor_labels.shape[0], dtype=neighbor_labels.dtype)
     for i, row in enumerate(neighbor_labels):
         labs, cnts = np.unique(row, return_counts=True)
