@@ -9,8 +9,12 @@
 ---
 
 ## Setup Instructions
+1. Install the conda environment `snp-pop`.
+```
+cd /path/to/snp-pop-classification
+conda env create -f environment.yml
+```
 
-1. Install the conda environment.
 2. Data setup:
 
    * To download manually:
@@ -27,11 +31,11 @@
 
 ## Overview
 
-Run the Python scripts and notebooks in the order below. Each notebook includes a brief description of its cells.
+Run the Python scripts and notebooks in the order below using `snp-pop` env. Each notebook includes a brief description of its cells.
 
 ---
 
-## 1. Data Processing
+## 1. Data Processing 
 
 **File:** `data/DataProcessing.py`
 
